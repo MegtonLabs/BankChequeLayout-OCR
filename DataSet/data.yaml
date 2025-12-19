@@ -1,0 +1,6 @@
+train: train/images
+val: valid/images
+test: test
+
+nc: 7
+names: ['Account_Number', 'Amount', 'Bank_Name', 'Date', 'IFSC', 'MICR', 'Signature']

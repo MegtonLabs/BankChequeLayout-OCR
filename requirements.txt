@@ -1,0 +1,9 @@
+transformers
+torch
+pandas
+opencv-python-headless
+xlsxwriter
+scikit-image
+imutils
+pytesseract
+Pillow
