@@ -2,8 +2,6 @@
 
 A comprehensive Computer Vision system designed to automate the extraction of key information from bank cheques. This project leverages **YOLOv11** for precise layout detection and integrates OCR technologies to digitize extracted fields.
 
-![YOLOv11 Architecture](https://www.researchgate.net/figure/The-schematic-diagram-of-YOLOv11-illustrating-its-three-core-components-Backbone-Neck_fig1_386467184)
-
 ## 🚀 Features
 *   **Object Detection:** Accurate detection of layout fields (Date, Account Number, Amount, Signature, Bank Name, MICR, IFSC) using **YOLOv11**.
 *   **OCR Analysis:** Text extraction using Tesseract and other OCR utilities.
