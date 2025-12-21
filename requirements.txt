@@ -7,3 +7,4 @@ scikit-image
 imutils
 pytesseract
 Pillow
+google-cloud-vision
