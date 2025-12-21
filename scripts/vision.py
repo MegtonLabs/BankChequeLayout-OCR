@@ -15,8 +15,33 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 model_path = os.path.join(project_root, 'models', 'trocr-base-printed')
 
-processor = TrOCRProcessor.from_pretrained(model_path)
-model = VisionEncoderDecoderModel.from_pretrained(model_path)
+# Check if model exists locally; if not, download and save it
+if not os.path.exists(model_path) or not any(fname.endswith('.json') for fname in os.listdir(model_path)):
+    print(f"Model not found at {model_path}. Downloading from Hugging Face...")
+    
+    # Use a temporary cache dir inside the project to avoid touching system global cache
+    temp_cache_dir = os.path.join(model_path, "temp_cache")
+    if not os.path.exists(temp_cache_dir):
+        os.makedirs(temp_cache_dir, exist_ok=True)
+        
+    print(f"Downloading to temporary cache: {temp_cache_dir}...")
+    processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed', cache_dir=temp_cache_dir)
+    model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed', cache_dir=temp_cache_dir)
+    
+    print(f"Saving model to {model_path}...")
+    processor.save_pretrained(model_path)
+    model.save_pretrained(model_path)
+    
+    # Cleanup temp cache
+    print("Cleaning up temporary cache...")
+    import shutil
+    if os.path.exists(temp_cache_dir):
+        shutil.rmtree(temp_cache_dir)
+else:
+    print(f"Loading from local path: {model_path}")
+    processor = TrOCRProcessor.from_pretrained(model_path)
+    model = VisionEncoderDecoderModel.from_pretrained(model_path)
+
 print("TrOCR model loaded.")
 
 def vision_api(f):
