@@ -64,12 +64,14 @@ def vision_api(f):
         img.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-        # Prepare prompt for GLM-OCR
+        # Prepare prompts for GLM-OCR
+        system_prompt = "You are a strict, highly accurate OCR engine. Your only job is to read text from bank cheque snippets. Do not include any conversational filler, markdown formatting, or explanations. Output ONLY the raw text."
         prompt = "Extract and recognize all text from this image. Return only the extracted text, nothing else."
 
         # Call Ollama API
         payload = {
             "model": OLLAMA_MODEL,
+            "system": system_prompt,
             "prompt": prompt,
             "images": [img_base64],
             "stream": False,

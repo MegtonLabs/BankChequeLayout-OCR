@@ -11,72 +11,253 @@ from ultralytics import YOLO
 import pandas as pd
 import cv2
 import os
+import base64
+import requests
 
 import re
+SIGNATURE_MODEL = "glm-ocr"
 
 def validate_signature(crop):
     """
-    Checks if the signature crop actually contains a signature (ink).
-    Removes horizontal lines (underlines) before checking.
-    Returns True if valid, False otherwise.
+    Use Ollama vision model to check if a handwritten signature exists.
+    Falls back to CV pixel analysis if Ollama fails.
     """
     if crop is None or crop.size == 0:
+        print("    [DEBUG] Signature crop is empty/None")
         return False
-        
-    # Convert to grayscale
+
+    cv2.imwrite("../fields/debug_signature_crop.jpg", crop)
+
+    # ── Step 1: Detect available Ollama model ────────────────────────
+    model_name = _detect_ollama_model()
+    if not model_name:
+        print("    [WARNING] No Ollama model found. Falling back to CV check.")
+        return _cv_fallback(crop)
+
+    # ── Step 2: Encode image ─────────────────────────────────────────
+    _, buf = cv2.imencode(".jpg", crop)
+    img_b64 = base64.b64encode(buf).decode("utf-8")
+
+    # ── Step 3: Ask Ollama ───────────────────────────────────────────
+    answer = _ask_ollama(model_name, img_b64)
+
+    if answer is not None:
+        return answer
+
+    # ── Step 4: Fallback to CV ───────────────────────────────────────
+    print("    [DEBUG] Ollama gave no clear answer. Falling back to CV check.")
+    return _cv_fallback(crop)
+
+
+def _detect_ollama_model():
+    """Auto-detect the first available Ollama model."""
+    try:
+        resp = requests.get("http://localhost:11434/api/tags", timeout=10)
+        if resp.status_code == 200:
+            models = resp.json().get("models", [])
+            model_names = [m.get("name", "") for m in models]
+            print(f"    [DEBUG] Ollama models found: {model_names}")
+
+            if model_names:
+                # Prefer vision/VQA models over pure-text ones
+                vqa_preferred = ["llava", "minicpm", "bakllava", "glm"]
+                for pref in vqa_preferred:
+                    for m in model_names:
+                        if pref in m.lower():
+                            print(f"    [DEBUG] Selected model: {m}")
+                            return m
+                # Fallback: use first available
+                print(f"    [DEBUG] Selected model (fallback): {model_names[0]}")
+                return model_names[0]
+    except requests.exceptions.ConnectionError:
+        print("    [ERROR] Cannot connect to Ollama at localhost:11434")
+        print("    [ERROR] Make sure Ollama is running: ollama serve")
+    except Exception as e:
+        print(f"    [ERROR] Model detection failed: {e}")
+    return None
+
+
+def _ask_ollama(model_name, img_b64):
+    """
+    Try BOTH Ollama API formats (chat and generate).
+    Returns True/False or None if unclear.
+    """
+    prompt = (
+        "Look at this image. It is cropped from the signature area of a bank cheque.\n"
+        "Does this image contain a HANDWRITTEN signature made by a person with a pen?\n\n"
+        "IMPORTANT RULES:\n"
+        "- Printed text like 'Authorised Signatory' is NOT a signature → answer NO\n"
+        "- Straight lines or empty space is NOT a signature → answer NO\n"
+        "- Only actual handwritten pen/ink strokes count as a signature → answer YES\n\n"
+        "Answer with ONLY one word: YES or NO"
+    )
+
+    # ── Try /api/chat (works with most vision models) ────────────────
+    answer = _try_chat_api(model_name, prompt, img_b64)
+    if answer is not None:
+        return answer
+
+    # ── Try /api/generate (older format) ─────────────────────────────
+    answer = _try_generate_api(model_name, prompt, img_b64)
+    if answer is not None:
+        return answer
+
+    return None
+
+
+def _try_chat_api(model_name, prompt, img_b64):
+    """Try Ollama /api/chat endpoint."""
+    try:
+        print(f"    [DEBUG] Trying /api/chat with model={model_name}...")
+        resp = requests.post(
+            "http://localhost:11434/api/chat",
+            json={
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                        "images": [img_b64],
+                    }
+                ],
+                "stream": False,
+            },
+            timeout=120,
+        )
+        print(f"    [DEBUG] /api/chat status: {resp.status_code}")
+
+        if resp.status_code == 200:
+            data = resp.json()
+            content = data.get("message", {}).get("content", "").strip()
+            print(f"    [DEBUG] /api/chat raw response: '{content}'")
+            return _parse_yes_no(content)
+        else:
+            print(f"    [DEBUG] /api/chat error body: {resp.text[:200]}")
+    except requests.exceptions.ConnectionError:
+        print("    [ERROR] Ollama not running")
+    except Exception as e:
+        print(f"    [DEBUG] /api/chat exception: {e}")
+    return None
+
+
+def _try_generate_api(model_name, prompt, img_b64):
+    """Try Ollama /api/generate endpoint."""
+    try:
+        print(f"    [DEBUG] Trying /api/generate with model={model_name}...")
+        resp = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": model_name,
+                "prompt": prompt,
+                "images": [img_b64],
+                "stream": False,
+            },
+            timeout=120,
+        )
+        print(f"    [DEBUG] /api/generate status: {resp.status_code}")
+
+        if resp.status_code == 200:
+            data = resp.json()
+            content = data.get("response", "").strip()
+            print(f"    [DEBUG] /api/generate raw response: '{content}'")
+            return _parse_yes_no(content)
+        else:
+            print(f"    [DEBUG] /api/generate error body: {resp.text[:200]}")
+    except requests.exceptions.ConnectionError:
+        print("    [ERROR] Ollama not running")
+    except Exception as e:
+        print(f"    [DEBUG] /api/generate exception: {e}")
+    return None
+
+
+def _parse_yes_no(text):
+    """
+    Parse LLM response to extract YES/NO answer.
+    Returns True, False, or None (ambiguous).
+    """
+    if not text:
+        return None
+
+    text_lower = text.lower().strip()
+    words = re.sub(r"[^a-z\s]", " ", text_lower).split()
+
+    print(f"    [DEBUG] Parsed words: {words[:10]}")
+
+    # Direct match
+    if words and words[0] in ("yes", "no"):
+        result = words[0] == "yes"
+        print(f"    [DEBUG] Direct match: {result}")
+        return result
+
+    # Check for negation patterns (no signature, not present, etc.)
+    neg_phrases = [
+        "no signature", "no handwritten", "not contain", "does not",
+        "doesn't", "don't see", "cannot see", "no pen", "no ink",
+        "is not", "isn't", "empty", "blank", "only printed",
+        "no there", "there is no"
+    ]
+    for phrase in neg_phrases:
+        if phrase in text_lower:
+            print(f"    [DEBUG] Negative phrase match: '{phrase}'")
+            return False
+
+    # Check for affirmative patterns
+    pos_phrases = [
+        "yes", "signature present", "handwritten signature",
+        "contains a signature", "there is a signature",
+        "signature is present", "signed"
+    ]
+    for phrase in pos_phrases:
+        if phrase in text_lower:
+            print(f"    [DEBUG] Positive phrase match: '{phrase}'")
+            return True
+
+    print(f"    [DEBUG] Could not parse YES/NO from: '{text[:100]}'")
+    return None
+
+
+def _cv_fallback(crop):
+    """
+    Simple CV-based check: measure ink pixels after removing lines.
+    Only used when Ollama is unavailable.
+    """
+    print("    [DEBUG] Running CV fallback...")
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    
-    # Threshold to binary (inverted: text is white, background black)
-    # Use simple thresholding to avoid noise from adaptive
-    _, binary = cv2.threshold(gray,  0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    
-    # Remove horizontal lines (underline)
-    # Increase kernel size to remove longer lines
-    # Use a slightly thicker kernel to catch thicker lines
-    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 2))
-    
-    # Detect lines
-    detected_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-    
-    # Subtract lines from binary image
-    detected_lines = cv2.dilate(detected_lines, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
-    binary_no_lines = cv2.bitwise_and(binary, binary, mask=cv2.bitwise_not(detected_lines))
-        
-    # Check for connected components
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_no_lines, connectivity=8)
-    
-    valid_components = 0
-    total_ink_area = 0
-    
-    for i in range(1, num_labels): # Skip background (0)
-        area = stats[i, cv2.CC_STAT_AREA]
-        height = stats[i, cv2.CC_STAT_HEIGHT]
-        width = stats[i, cv2.CC_STAT_WIDTH]
-        x = stats[i, cv2.CC_STAT_LEFT]
-        y = stats[i, cv2.CC_STAT_TOP]
-        
-        # Filter small noise
-        if area > 200:
-            # Calculate Aspect Ratio
-            aspect_ratio = width / height
-            
-            # Calculate Density (Solidity within bounding box)
-            density = area / (width * height)
-            
-            # Heuristics to reject non-signature components:
-            # 1. Too flat (Line remnant): AR > 5
-            # 2. Too solid (Block of text or thick line): Density > 0.6
-            
-            if aspect_ratio < 5.0 and density < 0.6:
-                valid_components += 1
-                total_ink_area += area
-            
-    # Thresholds:
-    # At least 1 significant component that isn't a flat line or block
-    if valid_components < 1:
-        return False
-        
-    return True
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    h, w = binary.shape
+
+    # Remove horizontal lines
+    h_k = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 3, 40), 2))
+    h_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_k, iterations=2)
+    h_lines = cv2.dilate(h_lines,
+                         cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5)),
+                         iterations=1)
+
+    # Remove vertical lines
+    v_k = cv2.getStructuringElement(cv2.MORPH_RECT, (2, max(h // 3, 40)))
+    v_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_k, iterations=2)
+    v_lines = cv2.dilate(v_lines,
+                         cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)),
+                         iterations=1)
+
+    # Subtract lines
+    all_lines = cv2.bitwise_or(h_lines, v_lines)
+    clean = cv2.bitwise_and(binary, binary, mask=cv2.bitwise_not(all_lines))
+
+    # Remove small noise
+    noise_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    clean = cv2.morphologyEx(clean, cv2.MORPH_OPEN, noise_k)
+
+    cv2.imwrite("../fields/debug_sig_cv_clean.jpg", clean)
+
+    ink = cv2.countNonZero(clean)
+    total = h * w if h * w > 0 else 1
+    ratio = ink / total
+
+    print(f"    [DEBUG] CV fallback: ink={ink}, total={total}, ratio={ratio:.4f}")
+
+    # Threshold: real signatures typically cover 0.5-5% of crop area
+    return ratio > 0.005
 
 def preprocess_image(crop, field_type, method='default'):
     """
@@ -179,6 +360,35 @@ def clean_text(text, field_type):
         return ""
     
     text = text.strip()
+    
+    if field_type == 'BankName':
+        # Look for known bank names if the OCR is noisy
+        known_banks = [
+            "SyndicateBank", "State Bank of India", "HDFC Bank", "ICICI Bank", 
+            "Axis Bank", "Punjab National Bank", "Canara Bank", "Bank of Baroda",
+            "Union Bank of India", "IDBI Bank", "Indian Bank"
+        ]
+        
+        # Check for keywords to isolate the specific bank name
+        for bank in known_banks:
+            if bank.lower() in text.lower():
+                return bank
+                
+        # If no strict match, try to clean common noise
+        # Remove "भारत सरकार का उपक्रम", "Govt. of India Undertaking", etc.
+        noise_patterns = [
+            r'भारत सरकार.*',
+            r'Govt\. of India.*',
+            r'A Govt\. of India.*',
+            r'Understaking',
+            r'विश्वसनीय.*',
+            r'Faithful.*',
+            r'Friendly.*'
+        ]
+        for pattern in noise_patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
+            
+        return text.strip()
     
     if field_type == 'IFSC':
         # Remove common noise words
@@ -532,42 +742,13 @@ def main():
                     extracted_text = micr_ocr_engine.predict(crop)
                     print(f"    Result: {extracted_text}")
                     cheque_fields[field_key] = extracted_text
+                    
                 elif field_key == 'Signature':
-                     # Set to True if signature is detected AND valid (has ink)
-                     # AND doesn't just say "Authorized Signatory"
-                     
-                     is_valid_visual = validate_signature(crop)
-                     
-                     if is_valid_visual:
-                         # Run OCR to check for printed labels
-                         # Preprocess? Maybe not needed for printed text, but let's be safe
-                         # processed_sig = preprocess_image(crop, 'Signature') # We don't have a specific one, default is fine
-                         
-                         print(f"    Validating Signature content with OCR...")
-                         sig_text_list = vision_api(crop)
-                         sig_text = " ".join(sig_text_list).strip().upper()
-                         print(f"    Signature OCR: {sig_text}")
-                         
-                         # Keywords that indicate it's just a label
-                         keywords = [
-                             "SIGNATORY", "AUTHORIZED", "AUTHORISED", "MANAGER", "DIRECTOR", 
-                             "SECRETARY", "CHAIRMAN", "PRESIDENT", "TREASURER", "PARTNER", 
-                             "TRUSTEE", "PROPRIETOR", "AUTH", "SIGN", "HERE", "ABOVE", "BELOW",
-                             "PARTNERSHIP", "HOLDER", "SHIP", "FOR"
-                         ]
-                         
-                         is_label = False
-                         for kw in keywords:
-                             if kw in sig_text:
-                                 is_label = True
-                                 break
-                                 
-                         if is_label:
-                             print(f"    Signature rejected (Label detected: {sig_text})")
-                             cheque_fields['Signature'] = 'False'
-                         else:
-                             cheque_fields['Signature'] = 'True'
-                     else:
+                    is_valid_visual = validate_signature(crop)
+                    if is_valid_visual:
+                        print("    Signature validated via ink analysis. Skipping OCR label check.")
+                        cheque_fields['Signature'] = 'True'
+                    else:
                         print("    Signature detection rejected (empty/noise).")
                         cheque_fields['Signature'] = 'False'
                 else:
