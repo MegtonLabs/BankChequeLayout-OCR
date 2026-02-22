@@ -3,22 +3,21 @@ YOLOv11 Cheque Detection Inference Script
 This script runs inference on images using the trained YOLOv11 model and saves the detection results to a CSV file.
 """
 
-import torch
 from ultralytics import YOLO
 import os
 import glob
 import cv2
-from pathlib import Path
 import pandas as pd
+from COLOR_CONFIG import CLASS_COLORS, print_color_guide
 
 
 def main():
     # Configuration
-    model_path = 'runs/detect/cheque_detection/weights/best.pt'
+    model_path = 'runs/detect/train/weights/best.pt'  # <-- FIXED PATH
     test_images_dir = 'DataSet/test/images'
     output_dir = 'runs/detect/predictions'
     results_csv_path = 'runs/detect/detection_results.csv'
-    confidence_threshold = 0.25
+    confidence_threshold = 0.64  # <-- OPTIMIZED THRESHOLD FROM F1 CURVE
     
     print('='*50)
     print('YOLOv11 Cheque Detection Inference')
@@ -53,6 +52,9 @@ def main():
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
+    # Display color guide for reference
+    print_color_guide()
+    
     # List to store detection results
     detection_data = []
     
@@ -63,6 +65,12 @@ def main():
         image_name = os.path.basename(image_path)
         print(f'[{i}/{len(test_images)}] Processing: {image_name}')
         
+        # Load image
+        img = cv2.imread(image_path)
+        if img is None:
+            print('  ERROR: Could not read image')
+            continue
+        
         # Run prediction (don't save automatically)
         results = model.predict(
             source=image_path,
@@ -70,17 +78,32 @@ def main():
             save=False  # We'll save manually with custom settings
         )
         
-        # Plot with custom font size and save
-        result_img = results[0].plot(
-            line_width=2,     # Box line thickness
-            font_size=5.0,    # Larger font (try 1.0-3.0)
-            labels=True,
-            conf=True
-        )
+        # Create a copy for annotation
+        annotated_img = img.copy()
+        
+        # Draw bounding boxes with custom colors
+        detections = results[0].boxes
+        for box in detections:
+            cls_id = int(box.cls[0])
+            cls_name = model.names[cls_id]
+            conf = float(box.conf[0])
+            xyxy = box.xyxy[0].cpu().numpy().astype(int)
+            
+            # Get color for this class (default to Green if not found)
+            color = CLASS_COLORS.get(cls_name, (0, 255, 0))
+            
+            # Draw bounding box with specific color
+            cv2.rectangle(annotated_img, (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3])), color, 2)
+            
+            # Add label background and text
+            label = f"{cls_name} {conf:.2f}"
+            (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(annotated_img, (int(xyxy[0]), int(xyxy[1]) - 20), (int(xyxy[0]) + w, int(xyxy[1])), color, -1)
+            cv2.putText(annotated_img, label, (int(xyxy[0]), int(xyxy[1]) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Save the image
         save_path = os.path.join(output_dir, image_name)
-        cv2.imwrite(save_path, result_img)
+        cv2.imwrite(save_path, annotated_img)
         
         # Extract and store detection results
         detections = results[0].boxes

@@ -1,52 +1,34 @@
 from imports import *
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel, logging
-import torch
 from PIL import Image
 import numpy as np
 import cv2
+import base64
+import requests
+import json
+import io
 
-# Suppress warnings
-logging.set_verbosity_error()
+print("Initializing GLM-OCR from Ollama...")
 
-import os
-print("Loading TrOCR model (./models/trocr-base-printed)... this may take a moment.")
-# Get the absolute path to the project root (assuming scripts/vision.py structure)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-model_path = os.path.join(project_root, 'models', 'trocr-base-printed')
+# Configuration for Ollama GLM-OCR
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "glm-ocr"  # Make sure this model is available in Ollama
 
-# Check if model exists locally; if not, download and save it
-if not os.path.exists(model_path) or not any(fname.endswith('.json') for fname in os.listdir(model_path)):
-    print(f"Model not found at {model_path}. Downloading from Hugging Face...")
-    
-    # Use a temporary cache dir inside the project to avoid touching system global cache
-    temp_cache_dir = os.path.join(model_path, "temp_cache")
-    if not os.path.exists(temp_cache_dir):
-        os.makedirs(temp_cache_dir, exist_ok=True)
-        
-    print(f"Downloading to temporary cache: {temp_cache_dir}...")
-    processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed', cache_dir=temp_cache_dir)
-    model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed', cache_dir=temp_cache_dir)
-    
-    print(f"Saving model to {model_path}...")
-    processor.save_pretrained(model_path)
-    model.save_pretrained(model_path)
-    
-    # Cleanup temp cache
-    print("Cleaning up temporary cache...")
-    import shutil
-    if os.path.exists(temp_cache_dir):
-        shutil.rmtree(temp_cache_dir)
-else:
-    print(f"Loading from local path: {model_path}")
-    processor = TrOCRProcessor.from_pretrained(model_path)
-    model = VisionEncoderDecoderModel.from_pretrained(model_path)
-
-print("TrOCR model loaded.")
+print(f"GLM-OCR will use Ollama model: {OLLAMA_MODEL}")
+print("Note: Make sure Ollama is running and the glm-ocr model is installed")
+print("Run: ollama pull glm-ocr (if not already installed)")
 
 def vision_api(f):
+    """
+    Extract text from image using Ollama GLM-OCR model
+    
+    Args:
+        f: Image file path (str), numpy array (OpenCV format), or PIL Image
+        
+    Returns:
+        List containing extracted text
+    """
     try:
-        # Read image
+        # Convert input to PIL Image
         if isinstance(f, str):
             img = Image.open(f).convert("RGB")
         elif isinstance(f, np.ndarray):
@@ -57,39 +39,67 @@ def vision_api(f):
             img = f.convert("RGB")
 
         # Preprocessing for better OCR
-        # 1. Resize if too small (TrOCR works better with larger text)
+        # 1. Resize if too small (GLM-OCR works better with reasonable-sized images)
         if img.width < 384 or img.height < 384:
-            scale = max(384/img.width, 384/img.height)
+            scale = max(384 / img.width, 384 / img.height)
             new_size = (int(img.width * scale), int(img.height * scale))
             img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-        # 2. Enhance contrast (optional, but often helps with faint text)
-        # Convert to numpy for OpenCV processing
+        # 2. Enhance contrast
         img_np = np.array(img)
         # Convert to LAB color space
         lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
-        l, a, b = cv2.split(lab)
+        L_channel, a_channel, b_channel = cv2.split(lab)
         # Apply CLAHE to L-channel
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        cl = clahe.apply(l)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        L_enhanced = clahe.apply(L_channel)
         # Merge channels
-        limg = cv2.merge((cl,a,b))
+        lab_enhanced = cv2.merge((L_enhanced, a_channel, b_channel))
         # Convert back to RGB
-        img_np = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+        img_np = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2RGB)
         img = Image.fromarray(img_np)
 
-        pixel_values = processor(images=img, return_tensors="pt").pixel_values
-        generated_ids = model.generate(pixel_values)
-        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        
-        # Return as a list of words/strings to match previous interface
-        # The previous interface returned a list of words.
-        # TrOCR returns a full sentence/line. 
-        # We can return a list containing just the full text, or split it.
-        # Given the usage in main.py: extracted_text = " ".join(extracted_text_list).strip()
-        # Returning [generated_text] is safe.
-        return [generated_text]
+        # Convert image to base64
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+        # Prepare prompt for GLM-OCR
+        prompt = "Extract and recognize all text from this image. Return only the extracted text, nothing else."
+
+        # Call Ollama API
+        payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "images": [img_base64],
+            "stream": False,
+            "temperature": 0.3,  # Lower temperature for more consistent OCR
+        }
+
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=60)
+        
+        if response.status_code == 200:
+            result = response.json()
+            generated_text = result.get("response", "").strip()
+            
+            if generated_text:
+                # Return as a list to match previous interface
+                return [generated_text]
+            else:
+                print("GLM-OCR returned empty response")
+                return []
+        else:
+            print(f"Ollama API error: {response.status_code} - {response.text}")
+            return []
+
+    except requests.exceptions.ConnectionError:
+        print("ERROR: Cannot connect to Ollama. Make sure:")
+        print("  1. Ollama is running (ollama serve)")
+        print("  2. The glm-ocr model is installed (ollama pull glm-ocr)")
+        print("  3. Ollama is accessible at http://localhost:11434")
+        return []
     except Exception as e:
-        print(f"TrOCR Error: {e}")
+        print(f"GLM-OCR Error: {e}")
+        import traceback
+        traceback.print_exc()
         return []

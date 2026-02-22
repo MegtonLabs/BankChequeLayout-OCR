@@ -28,7 +28,7 @@ def validate_signature(crop):
     
     # Threshold to binary (inverted: text is white, background black)
     # Use simple thresholding to avoid noise from adaptive
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, binary = cv2.threshold(gray,  0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
     # Remove horizontal lines (underline)
     # Increase kernel size to remove longer lines
@@ -437,6 +437,18 @@ def main():
     annotated_img = img.copy()
 
     print("\nDetections:")
+    
+    # Define colors for visualization (BGR)
+    class_colors = {
+        'Account_Number': (255, 0, 0),      # Blue
+        'Amount': (0, 0, 255),              # Red
+        'Bank_Name': (0, 140, 255),         # Orange
+        'Date': (255, 0, 255),              # Magenta
+        'IFSC': (0, 255, 255),              # Yellow
+        'MICR': (128, 0, 128),              # Purple
+        'Signature': (0, 128, 0)            # Dark Green
+    }
+
     for result in results:
         boxes = result.boxes
         for box in boxes:
@@ -447,8 +459,17 @@ def main():
             
             print(f"  - {cls_name} ({conf:.2f})")
 
-            # Draw bounding box on the annotated image (for check_cont_.jpg)
-            cv2.rectangle(annotated_img, (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3])), (0, 255, 0), 2)
+            # Get color for this class (default to Green if not found)
+            color = class_colors.get(cls_name, (0, 255, 0))
+
+            # Draw bounding box with specific color
+            cv2.rectangle(annotated_img, (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3])), color, 2)
+
+            # Add label background and text
+            label = f"{cls_name} {conf:.2f}"
+            (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(annotated_img, (int(xyxy[0]), int(xyxy[1]) - 20), (int(xyxy[0]) + w, int(xyxy[1])), color, -1)
+            cv2.putText(annotated_img, label, (int(xyxy[0]), int(xyxy[1]) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             # Crop the image with padding
             # Padding helps OCR and contour detection (especially for MICR)
@@ -606,7 +627,18 @@ def main():
                     cheque_fields[field_key] = cleaned_text
 
     # Save the annotated image
+    # Save the annotated image (Legacy debug)
     cv2.imwrite('../fields/check_cont_.jpg', annotated_img)
+
+    # Save to predictions folder
+    predictions_dir = '../predictions'
+    if not os.path.exists(predictions_dir):
+        os.makedirs(predictions_dir)
+        
+    base_name = os.path.basename(img_path)
+    prediction_path = os.path.join(predictions_dir, base_name)
+    cv2.imwrite(prediction_path, annotated_img)
+    print(f"Annotated image saved to {prediction_path}")
 
     # Create DataFrame with specific column order
     columns_order = ['BankName', 'AC/NO', 'IFSC', 'Amount', 'Cheque MICR Number', 'Date', 'Signature']

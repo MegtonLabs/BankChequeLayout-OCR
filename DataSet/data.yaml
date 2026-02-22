@@ -4,3 +4,13 @@ test: test
 
 nc: 7
 names: ['Account_Number', 'Amount', 'Bank_Name', 'Date', 'IFSC', 'MICR', 'Signature']
+
+# Custom colors (RGB format) - used by YOLOv11 for all visualizations
+colors:
+  - [0, 0, 255]        # Account_Number - Blue
+  - [255, 0, 0]        # Amount - Red
+  - [255, 140, 0]      # Bank_Name - Orange
+  - [255, 0, 255]      # Date - Magenta
+  - [255, 255, 0]      # IFSC - Yellow
+  - [128, 0, 128]      # MICR - Purple
+  - [0, 128, 0]        # Signature - Dark Green
