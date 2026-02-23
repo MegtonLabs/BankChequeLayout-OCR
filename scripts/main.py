@@ -11,7 +11,6 @@ from ultralytics import YOLO
 import pandas as pd
 import cv2
 import os
-import base64
 import requests
 
 import re
@@ -19,8 +18,12 @@ SIGNATURE_MODEL = "glm-ocr"
 
 def validate_signature(crop):
     """
-    Use Ollama vision model to check if a handwritten signature exists.
-    Falls back to CV pixel analysis if Ollama fails.
+    Detect if a handwritten signature exists in the cropped signature area.
+    
+    Strategy (works with glm-ocr which is a pure OCR model, NOT a VQA model):
+      1. Use CV ink-analysis to check for handwritten strokes (primary).
+      2. Use OCR to read any text — if only printed labels like
+         "Authorised Signatory" are found with no ink strokes, it's NOT a signature.
     """
     if crop is None or crop.size == 0:
         print("    [DEBUG] Signature crop is empty/None")
@@ -28,52 +31,131 @@ def validate_signature(crop):
 
     cv2.imwrite("../fields/debug_signature_crop.jpg", crop)
 
-    # ── Step 1: Detect available Ollama model ────────────────────────
-    model_name = _detect_ollama_model()
-    if not model_name:
-        print("    [WARNING] No Ollama model found. Falling back to CV check.")
-        return _cv_fallback(crop)
+    # ── Step 1: CV ink analysis (primary check) ──────────────────────
+    has_ink = _cv_fallback(crop)
+    print(f"    [DEBUG] CV ink analysis result: {has_ink}")
 
-    # ── Step 2: Encode image ─────────────────────────────────────────
-    _, buf = cv2.imencode(".jpg", crop)
-    img_b64 = base64.b64encode(buf).decode("utf-8")
+    # ── Step 2: OCR text check (secondary — filters false positives) ─
+    ocr_text = _ocr_read_signature(crop)
+    print(f"    [DEBUG] OCR text in signature area: '{ocr_text}'")
 
-    # ── Step 3: Ask Ollama ───────────────────────────────────────────
-    answer = _ask_ollama(model_name, img_b64)
+    # Known printed labels that appear in the signature box on cheques
+    printed_labels = [
+        "authorised signatory", "authorized signatory",
+        "authorised signature", "authorized signature",
+        "signatory", "for ", "signature", "sign here",
+        "please sign", "account holder",
+    ]
 
-    if answer is not None:
-        return answer
+    text_lower = ocr_text.lower().strip()
+    is_only_printed_label = False
+    if text_lower:
+        # Check if the OCR text is ONLY a printed label (no extra handwriting)
+        is_only_printed_label = any(label in text_lower for label in printed_labels)
 
-    # ── Step 4: Fallback to CV ───────────────────────────────────────
-    print("    [DEBUG] Ollama gave no clear answer. Falling back to CV check.")
-    return _cv_fallback(crop)
+    # ── Decision logic ───────────────────────────────────────────────
+    if has_ink and not is_only_printed_label:
+        # Ink strokes found and OCR didn't read just a printed label → real signature
+        print("    [DEBUG] Decision: TRUE (ink strokes + not just a printed label)")
+        return True
+    elif has_ink and is_only_printed_label:
+        # Ink detected but OCR reads only a printed label.
+        # The ink might be from the printed text itself. Check ink ratio more strictly.
+        strict_result = _cv_strict_check(crop)
+        print(f"    [DEBUG] Decision: {strict_result} (ink found but printed label detected, strict check)")
+        return strict_result
+    else:
+        # No significant ink strokes at all → no signature
+        print("    [DEBUG] Decision: FALSE (no ink strokes detected)")
+        return False
+
+
+def _ocr_read_signature(crop):
+    """
+    Use glm-ocr (via vision_api) to read any text in the signature crop.
+    Returns the raw OCR text (empty string if nothing readable).
+    """
+    try:
+        text_list = vision_api(crop)
+        return " ".join(text_list).strip()
+    except Exception as e:
+        print(f"    [DEBUG] OCR read failed: {e}")
+        return ""
+
+
+def _cv_strict_check(crop):
+    """
+    Stricter CV check: when printed text is present, we need a higher ink
+    threshold to confirm a HANDWRITTEN signature exists on top of it.
+    Uses contour analysis to distinguish printed text from handwritten strokes.
+    """
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    h, w = binary.shape
+
+    # Remove horizontal lines
+    h_k = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 3, 40), 2))
+    h_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_k, iterations=2)
+    h_lines = cv2.dilate(h_lines,
+                         cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5)),
+                         iterations=1)
+
+    # Remove vertical lines
+    v_k = cv2.getStructuringElement(cv2.MORPH_RECT, (2, max(h // 3, 40)))
+    v_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_k, iterations=2)
+    v_lines = cv2.dilate(v_lines,
+                         cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)),
+                         iterations=1)
+
+    # Subtract lines
+    all_lines = cv2.bitwise_or(h_lines, v_lines)
+    clean = cv2.bitwise_and(binary, binary, mask=cv2.bitwise_not(all_lines))
+
+    # Remove small noise
+    noise_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    clean = cv2.morphologyEx(clean, cv2.MORPH_OPEN, noise_k)
+
+    # Find contours — handwritten signatures have large, irregular contours
+    # while printed text has many small, uniform contours
+    contours, _ = cv2.findContours(clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return False
+
+    # Look for at least one large irregular contour (signature stroke)
+    large_contour_count = 0
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        # Signature strokes tend to have larger bounding boxes than individual text chars
+        x_c, y_c, w_c, h_c = cv2.boundingRect(cnt)
+        aspect_ratio = w_c / max(h_c, 1)
+
+        # A signature contour is typically wider than a single character
+        # and has an irregular aspect ratio
+        if area > (h * w * 0.002) and (aspect_ratio > 2.0 or aspect_ratio < 0.3):
+            large_contour_count += 1
+
+    # Use a higher ink ratio threshold since printed text also contributes ink
+    ink = cv2.countNonZero(clean)
+    total = h * w if h * w > 0 else 1
+    ratio = ink / total
+    print(f"    [DEBUG] Strict CV: ink_ratio={ratio:.4f}, large_contours={large_contour_count}")
+
+    # Need higher ink ratio AND at least one large irregular contour
+    return ratio > 0.015 and large_contour_count >= 1
 
 
 def _detect_ollama_model():
-    """Auto-detect the first available Ollama model."""
+    """Auto-detect the first available Ollama model. (Legacy — kept for reference)"""
     try:
         resp = requests.get("http://localhost:11434/api/tags", timeout=10)
         if resp.status_code == 200:
             models = resp.json().get("models", [])
             model_names = [m.get("name", "") for m in models]
-            print(f"    [DEBUG] Ollama models found: {model_names}")
-
             if model_names:
-                # Prefer vision/VQA models over pure-text ones
-                vqa_preferred = ["llava", "minicpm", "bakllava", "glm"]
-                for pref in vqa_preferred:
-                    for m in model_names:
-                        if pref in m.lower():
-                            print(f"    [DEBUG] Selected model: {m}")
-                            return m
-                # Fallback: use first available
-                print(f"    [DEBUG] Selected model (fallback): {model_names[0]}")
                 return model_names[0]
-    except requests.exceptions.ConnectionError:
-        print("    [ERROR] Cannot connect to Ollama at localhost:11434")
-        print("    [ERROR] Make sure Ollama is running: ollama serve")
-    except Exception as e:
-        print(f"    [ERROR] Model detection failed: {e}")
+    except Exception:
+        pass
     return None
 
 
@@ -86,9 +168,14 @@ def _ask_ollama(model_name, img_b64):
         "Look at this image. It is cropped from the signature area of a bank cheque.\n"
         "Does this image contain a HANDWRITTEN signature made by a person with a pen?\n\n"
         "IMPORTANT RULES:\n"
-        "- Printed text like 'Authorised Signatory' is NOT a signature → answer NO\n"
-        "- Straight lines or empty space is NOT a signature → answer NO\n"
-        "- Only actual handwritten pen/ink strokes count as a signature → answer YES\n\n"
+        "- Printed text like 'Authorised Signatory' or 'For Company Name' is NOT a signature → answer NO\n"
+        "- Straight lines, boxes, or empty space is NOT a signature → answer NO\n"
+        "- Only actual handwritten pen/ink strokes count as a signature → answer YES\n"
+        "- If you are unsure, answer NO\n"
+        "- If the image only contains printed text, answer NO\n"
+        "- If the image contains a stamp but no handwritten signature, answer NO\n"
+        "- If the image contains a stamp and a handwritten signature, answer YES\n"
+        "- If the image contains only a stamp, answer NO\n\n"
         "Answer with ONLY one word: YES or NO"
     )
 
