@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bank Cheque Layout Detection — Modified YOLOv11s Architecture</title>
+<style>
+/* ─── RESET & BASE ─── */
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  background:#ffffff;color:#1e293b;
+  min-width:1520px;
+  padding:30px 40px 50px;
+}
+
+/* ─── HEADER ─── */
+.hdr{text-align:center;margin-bottom:32px}
+.hdr h1{font-size:22px;font-weight:700;color:#0f172a;letter-spacing:.3px}
+.hdr p{font-size:12.5px;color:#64748b;margin-top:4px}
+
+/* ─── MAIN CANVAS ─── */
+.arch{
+  position:relative;
+  width:1440px;height:1200px;
+  margin:0 auto 28px;
+}
+
+/* ─── SECTION REGIONS ─── */
+.sec{
+  position:absolute;
+  border:1.5px solid #e2e8f0;
+  border-radius:12px;
+  background:#fafbfc;
+  z-index:0;
+}
+.sec .sl{
+  position:absolute;top:-11px;left:16px;
+  background:#fff;padding:0 8px;
+  font-size:10.5px;font-weight:700;
+  letter-spacing:.8px;text-transform:uppercase;
+}
+
+/* ─── BLOCKS (common) ─── */
+.bl{
+  position:absolute;z-index:3;
+  border-radius:8px;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  text-align:center;
+  padding:6px 10px;
+  font-size:11.5px;font-weight:600;
+  box-shadow:0 1px 4px rgba(0,0,0,.08);
+  cursor:default;
+  transition:box-shadow .15s;
+}
+.bl:hover{box-shadow:0 3px 12px rgba(0,0,0,.12)}
+.bl .d{font-size:9px;font-weight:400;color:#64748b;margin-top:2px}
+
+/* Block colour variants */
+.b-input{background:#ecfdf5;color:#065f46;border:1.5px solid #34d399}
+.b-conv{background:#eff6ff;color:#1e40af;border:1.5px solid #60a5fa}
+.b-c3k2{background:#f5f3ff;color:#5b21b6;border:1.5px solid #a78bfa}
+.b-sppf{background:#fffbeb;color:#92400e;border:1.5px solid #fbbf24}
+.b-attn{background:#fef2f2;color:#991b1b;border:1.5px solid #f87171}
+.b-up{background:#f0fdfa;color:#115e59;border:1.5px solid #2dd4bf}
+.b-cat{background:#fefce8;color:#854d0e;border:1.5px solid #facc15}
+.b-head{background:#faf5ff;color:#6b21a8;border:1.5px solid #c084fc}
+.b-nms{background:#fff1f2;color:#9f1239;border:1.5px solid #fb7185}
+
+/* ─── CHEQUE CARDS ─── */
+.chq{
+  position:absolute;z-index:4;
+  border-radius:10px;overflow:hidden;
+  box-shadow:0 2px 10px rgba(0,0,0,.1);
+  border:1.5px solid #cbd5e1;
+  background:#fff;
+}
+.chq .lab{
+  position:absolute;bottom:0;left:0;right:0;
+  background:rgba(255,255,255,.92);
+  color:#334155;font-size:9.5px;font-weight:600;
+  text-align:center;padding:3px 4px;
+  border-top:1px solid #e2e8f0;
+}
+
+/* ─── FEATURE MAP THUMBNAILS ─── */
+.fm{
+  position:absolute;z-index:4;
+  border-radius:6px;overflow:hidden;
+  border:1px solid #cbd5e1;
+  background:#fff;
+  box-shadow:0 1px 6px rgba(0,0,0,.07);
+}
+.fm canvas{display:block}
+.fm .fl{
+  position:absolute;bottom:0;left:0;right:0;
+  background:rgba(255,255,255,.9);
+  color:#475569;font-size:7.5px;font-weight:600;
+  text-align:center;padding:2px;
+  border-top:1px solid #e2e8f0;
+}
+
+/* ─── OUTPUT CARDS ─── */
+.ocard{
+  position:absolute;z-index:4;
+  border-radius:10px;overflow:hidden;
+  box-shadow:0 2px 10px rgba(0,0,0,.08);
+  border:1.5px solid #e2e8f0;
+  background:#fff;
+}
+.ocard .oh{
+  padding:6px 10px;
+  font-size:10.5px;font-weight:700;
+  letter-spacing:.3px;
+  border-bottom:1px solid #e2e8f0;
+}
+.ocard .ob{padding:8px 10px;font-size:10px}
+
+/* detection list row */
+.dr{display:flex;align-items:center;margin-bottom:3px}
+.dr .dot{width:9px;height:9px;border-radius:50%;margin-right:6px;flex-shrink:0}
+.dr .nm{color:#1e293b;font-weight:600;font-size:10px}
+.dr .cf{margin-left:auto;color:#94a3b8;font-size:9px;font-weight:500}
+
+/* ─── CONFIG TABLES ─── */
+.ctbl{
+  position:absolute;z-index:4;
+  background:#fff;border:1.5px solid #e2e8f0;
+  border-radius:8px;overflow:hidden;
+  box-shadow:0 1px 6px rgba(0,0,0,.06);
+}
+.ctbl .ch{
+  background:#f8fafc;color:#64748b;
+  font-size:9.5px;font-weight:700;
+  padding:5px 10px;letter-spacing:.5px;
+  text-transform:uppercase;
+  border-bottom:1px solid #e2e8f0;
+}
+.ctbl table{font-size:9.5px;border-collapse:collapse;width:100%}
+.ctbl td{padding:3px 10px;border-top:1px solid #f1f5f9}
+.ctbl td:first-child{color:#64748b;font-weight:600}
+.ctbl td:last-child{color:#1e293b;text-align:right;font-weight:500}
+
+/* ─── ANNOTATIONS ─── */
+.note{
+  position:absolute;z-index:5;
+  font-size:9px;color:#94a3b8;
+  font-style:italic;pointer-events:none;
+  line-height:1.4;
+}
+
+/* ─── RESIZE BADGE ─── */
+.rbadge{
+  position:absolute;z-index:5;
+  background:#ecfdf5;color:#059669;
+  font-size:9px;font-weight:700;
+  padding:3px 8px;border-radius:5px;
+  border:1px solid #34d399;
+  white-space:nowrap;
+}
+
+/* ─── LEGEND ─── */
+.legend{
+  display:flex;justify-content:center;flex-wrap:wrap;
+  gap:16px;padding:8px 20px 0;
+  max-width:1440px;margin:0 auto;
+}
+.litem{display:flex;align-items:center;gap:5px;font-size:10.5px;color:#64748b}
+.litem .swatch{width:14px;height:14px;border-radius:3px}
+.litem svg{width:30px;height:10px}
+
+/* ─── SVG ARROWS ─── */
+.arrows{
+  position:absolute;top:0;left:0;
+  width:100%;height:100%;
+  pointer-events:none;z-index:2;
+}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════ HEADER ════════════════════ -->
+<div class="hdr">
+  <h1>Bank Cheque Layout Detection &mdash; Custom YOLOv11s Architecture</h1>
+  <p>Modified YOLOv11-Small &bull; 7 Classes &bull; 416&times;416 Input &bull; Trained on Indian Bank Cheque Dataset</p>
+</div>
+
+<!-- ════════════════════ ARCHITECTURE ════════════════════ -->
+<div class="arch" id="A">
+
+<!-- ──── SECTION BACKGROUNDS ──── -->
+<div class="sec" style="left:18px;top:220px;width:260px;height:940px"><div class="sl" style="color:#2563eb">Backbone</div></div>
+<div class="sec" style="left:296px;top:220px;width:260px;height:940px"><div class="sl" style="color:#0d9488">Neck (FPN+PAN)</div></div>
+<div class="sec" style="left:574px;top:220px;width:260px;height:940px"><div class="sl" style="color:#7c3aed">Detection Head</div></div>
+<div class="sec" style="left:852px;top:220px;width:570px;height:940px"><div class="sl" style="color:#dc2626">Output &amp; OCR Pipeline</div></div>
+
+<!-- ──── INPUT CHEQUE ──── -->
+<div class="chq" style="left:18px;top:14px;width:272px;height:170px">
+  <canvas id="inputCheque" width="270" height="166"></canvas>
+  <div class="lab">&#128196; Input: Raw Bank Cheque Image</div>
+</div>
+
+<div class="note" style="left:300px;top:50px;font-size:10px;color:#059669;font-style:normal;font-weight:600;line-height:1.55">
+  Raw cheque image is resized<br>to 416&times;416 and normalised<br>before entering the backbone.
+</div>
+
+<div class="rbadge" style="left:100px;top:190px">Resize &rarr; 416&times;416&times;3</div>
+
+<!-- ──── INPUT TENSOR ──── -->
+<div class="bl b-input" style="left:52px;top:238px;width:190px;height:42px">Input Tensor<span class="d">416&times;416&times;3 (RGB)</span></div>
+
+<!-- ════════ FEATURE MAP THUMBNAILS ════════ -->
+<div class="fm" style="left:2px;top:310px;width:44px;height:50px">
+  <canvas id="fm1" width="42" height="38"></canvas>
+  <div class="fl">208&times;32</div>
+</div>
+<div class="fm" style="left:2px;top:546px;width:44px;height:50px">
+  <canvas id="fm2" width="42" height="38"></canvas>
+  <div class="fl">52&times;256</div>
+</div>
+<div class="fm" style="left:2px;top:870px;width:44px;height:50px">
+  <canvas id="fm3" width="42" height="38"></canvas>
+  <div class="fl">13&times;512</div>
+</div>
+
+<!-- ════════ BACKBONE (left column) ════════ -->
+<!-- Layer 0 -->
+<div class="bl b-conv" id="b0" style="left:60px;top:308px;width:180px;height:38px">Conv + BN + SiLU<span class="d">208&times;208&times;32 &middot; k3 s2</span></div>
+<!-- Layer 1 -->
+<div class="bl b-conv" id="b1" style="left:60px;top:368px;width:180px;height:38px">Conv + BN + SiLU<span class="d">104&times;104&times;64 &middot; k3 s2</span></div>
+<!-- Layer 2 -->
+<div class="bl b-c3k2" id="b2" style="left:52px;top:428px;width:196px;height:38px">C3K2 Block<span class="d">104&times;104&times;128 &middot; n=1 shortcut=F</span></div>
+<!-- Layer 3 -->
+<div class="bl b-conv" id="b3" style="left:60px;top:488px;width:180px;height:38px">Conv + BN + SiLU<span class="d">52&times;52&times;128 &middot; k3 s2</span></div>
+<!-- Layer 4  P3 -->
+<div class="bl b-c3k2" id="b4" style="left:52px;top:548px;width:196px;height:38px">C3K2 Block (P3)<span class="d">52&times;52&times;256 &middot; n=1 shortcut=F</span></div>
+<!-- Layer 5 -->
+<div class="bl b-conv" id="b5" style="left:60px;top:608px;width:180px;height:38px">Conv + BN + SiLU<span class="d">26&times;26&times;256 &middot; k3 s2</span></div>
+<!-- Layer 6  P4 -->
+<div class="bl b-c3k2" id="b6" style="left:52px;top:668px;width:196px;height:38px">C3K2 Block (P4)<span class="d">26&times;26&times;256 &middot; n=1 c3k=T</span></div>
+<!-- Layer 7 -->
+<div class="bl b-conv" id="b7" style="left:60px;top:728px;width:180px;height:38px">Conv + BN + SiLU<span class="d">13&times;13&times;512 &middot; k3 s2</span></div>
+<!-- Layer 8 -->
+<div class="bl b-c3k2" id="b8" style="left:52px;top:788px;width:196px;height:38px">C3K2 Block<span class="d">13&times;13&times;512 &middot; n=1 c3k=T</span></div>
+<!-- Layer 9 SPPF -->
+<div class="bl b-sppf" id="b9" style="left:60px;top:848px;width:180px;height:38px">SPPF<span class="d">13&times;13&times;512 &middot; k=5</span></div>
+<!-- Layer 10 C2PSA -->
+<div class="bl b-attn" id="b10" style="left:52px;top:908px;width:196px;height:42px">C2PSA (Attention)<span class="d">13&times;13&times;512 &middot; n=1</span></div>
+
+<!-- ════════ NECK — FPN top-down (middle column, bottom→up) ════════ -->
+<!-- Upsample ×2 -->
+<div class="bl b-up" id="n0" style="left:320px;top:908px;width:160px;height:34px">Upsample &times;2<span class="d">26&times;26&times;512</span></div>
+<!-- Concat + P4 -->
+<div class="bl b-cat" id="n1" style="left:316px;top:830px;width:168px;height:34px">Concat (+ P4 skip)<span class="d">26&times;26&times;768</span></div>
+<!-- C3K2 -->
+<div class="bl b-c3k2" id="n2" style="left:318px;top:776px;width:164px;height:34px">C3K2 Block<span class="d">26&times;26&times;256 &middot; n=1</span></div>
+<!-- Upsample ×2 -->
+<div class="bl b-up" id="n3" style="left:320px;top:718px;width:160px;height:34px">Upsample &times;2<span class="d">52&times;52&times;256</span></div>
+<!-- Concat + P3 -->
+<div class="bl b-cat" id="n4" style="left:316px;top:640px;width:168px;height:34px">Concat (+ P3 skip)<span class="d">52&times;52&times;512</span></div>
+<!-- C3K2 → feeds Small Head -->
+<div class="bl b-c3k2" id="n5" style="left:318px;top:586px;width:164px;height:34px">C3K2 Block<span class="d">52&times;52&times;128 &middot; n=1</span></div>
+
+<!-- ════════ NECK — PAN bottom-up ════════ -->
+<!-- Conv s2 -->
+<div class="bl b-conv" id="p0" style="left:324px;top:518px;width:152px;height:34px">Conv s2<span class="d">26&times;26&times;128</span></div>
+<!-- Concat -->
+<div class="bl b-cat" id="p1" style="left:316px;top:454px;width:168px;height:34px">Concat<span class="d">26&times;26&times;384</span></div>
+<!-- C3K2 → feeds Medium Head -->
+<div class="bl b-c3k2" id="p2" style="left:318px;top:396px;width:164px;height:34px">C3K2 Block<span class="d">26&times;26&times;256 &middot; n=1</span></div>
+<!-- Conv s2 -->
+<div class="bl b-conv" id="p3" style="left:324px;top:338px;width:152px;height:34px">Conv s2<span class="d">13&times;13&times;256</span></div>
+<!-- Concat + P5 -->
+<div class="bl b-cat" id="p4" style="left:316px;top:280px;width:168px;height:34px">Concat (+ P5)<span class="d">13&times;13&times;768</span></div>
+<!-- C3K2 → feeds Large Head -->
+<div class="bl b-c3k2" id="p5" style="left:318px;top:240px;width:164px;height:34px">C3K2 Block<span class="d">13&times;13&times;512 &middot; n=1 c3k=T</span></div>
+
+<!-- ════════ DETECTION HEAD ════════ -->
+<div class="bl b-head" id="h0" style="left:604px;top:574px;width:180px;height:44px">Detect — Small<span class="d">52&times;52 &middot; stride 8</span></div>
+<div class="bl b-head" id="h1" style="left:604px;top:392px;width:180px;height:44px">Detect — Medium<span class="d">26&times;26 &middot; stride 16</span></div>
+<div class="bl b-head" id="h2" style="left:604px;top:240px;width:180px;height:44px">Detect — Large<span class="d">13&times;13 &middot; stride 32</span></div>
+
+<!-- NMS -->
+<div class="bl b-nms" id="nms" style="left:618px;top:480px;width:152px;height:44px">NMS<span class="d">IoU=0.7 &middot; Conf&ge;0.64</span></div>
+
+<!-- ════════ OUTPUT SECTION ════════ -->
+<!-- Detected fields card -->
+<div class="ocard" style="left:870px;top:240px;width:210px;height:218px">
+  <div class="oh" style="background:#faf5ff;color:#6b21a8">Detected Cheque Fields</div>
+  <div class="ob">
+    <div class="dr"><span class="dot" style="background:#3b82f6"></span><span class="nm">Account_Number</span><span class="cf">0.94</span></div>
+    <div class="dr"><span class="dot" style="background:#ef4444"></span><span class="nm">Amount</span><span class="cf">0.92</span></div>
+    <div class="dr"><span class="dot" style="background:#f97316"></span><span class="nm">Bank_Name</span><span class="cf">0.97</span></div>
+    <div class="dr"><span class="dot" style="background:#d946ef"></span><span class="nm">Date</span><span class="cf">0.89</span></div>
+    <div class="dr"><span class="dot" style="background:#eab308"></span><span class="nm">IFSC</span><span class="cf">0.91</span></div>
+    <div class="dr"><span class="dot" style="background:#8b5cf6"></span><span class="nm">MICR</span><span class="cf">0.95</span></div>
+    <div class="dr"><span class="dot" style="background:#22c55e"></span><span class="nm">Signature</span><span class="cf">0.88</span></div>
+  </div>
+</div>
+
+<!-- Annotated cheque output -->
+<div class="ocard" style="left:870px;top:484px;width:360px;height:230px;border-color:#cbd5e1">
+  <div class="oh" style="background:#f8fafc;color:#334155">Annotated Output (Bounding Boxes)</div>
+  <canvas id="outputCheque" width="356" height="198" style="display:block"></canvas>
+</div>
+
+<!-- Excel output -->
+<div class="ocard" style="left:870px;top:740px;width:360px;height:158px;border-color:#86efac">
+  <div class="oh" style="background:#f0fdf4;color:#166534">Cheque_details.xlsx (Final Output)</div>
+  <div class="ob" style="padding:6px 8px">
+    <table style="width:100%;font-size:8.5px;border-collapse:collapse;color:#334155">
+      <tr style="background:#f8fafc;color:#64748b;font-weight:700">
+        <td style="padding:4px">Bank</td><td style="padding:4px">AC/NO</td>
+        <td style="padding:4px">IFSC</td><td style="padding:4px">Amount</td>
+        <td style="padding:4px">Date</td><td style="padding:4px">Sign</td>
+      </tr>
+      <tr>
+        <td style="padding:4px;border-top:1px solid #f1f5f9">Syndicate</td>
+        <td style="padding:4px;border-top:1px solid #f1f5f9">01234…</td>
+        <td style="padding:4px;border-top:1px solid #f1f5f9">SYNB0…</td>
+        <td style="padding:4px;border-top:1px solid #f1f5f9">₹25,000</td>
+        <td style="padding:4px;border-top:1px solid #f1f5f9">15/03/24</td>
+        <td style="padding:4px;border-top:1px solid #f1f5f9;color:#16a34a;font-weight:700">True</td>
+      </tr>
+    </table>
+    <div style="margin-top:6px;font-size:8px;color:#94a3b8;text-align:center">GLM-OCR (Ollama) → Field Cleaning → Excel Export</div>
+  </div>
+</div>
+
+<!-- OCR Pipeline -->
+<div class="ocard" style="left:870px;top:920px;width:360px;height:218px;border-color:#c4b5fd">
+  <div class="oh" style="background:#faf5ff;color:#6b21a8">Post-Detection OCR Pipeline</div>
+  <div class="ob" style="font-size:10px;line-height:1.75;color:#475569">
+    <div>① <b>Crop</b> detected fields from cheque image</div>
+    <div>② <b>Preprocess</b> — CLAHE, adaptive threshold, line removal</div>
+    <div>③ <b>GLM-OCR</b> via Ollama → raw text extraction</div>
+    <div>④ <b>Clean</b> text — field-specific regex + validation</div>
+    <div>⑤ <b>MICR</b> → Template Matching (E-13B font)</div>
+    <div>⑥ <b>Signature</b> → CV ink analysis + OCR label check</div>
+    <div>⑦ <b>Export</b> → Cheque_details.xlsx</div>
+  </div>
+</div>
+
+<!-- ════════ ANNOTATIONS ════════ -->
+<div class="note" style="left:254px;top:560px">← P3: 52×52×256</div>
+<div class="note" style="left:254px;top:680px">← P4: 26×26×256</div>
+<div class="note" style="left:254px;top:918px;font-size:8px">C2PSA adds spatial<br>attention at P5</div>
+<div class="note" style="left:490px;top:656px;color:#0d9488;font-style:normal;font-weight:600">FPN ↑</div>
+<div class="note" style="left:490px;top:516px;color:#ca8a04;font-style:normal;font-weight:600">PAN ↓</div>
+<div class="note" style="left:790px;top:590px;font-size:8px">Small: Date, IFSC</div>
+<div class="note" style="left:790px;top:408px;font-size:8px">Medium: Amount, AC</div>
+<div class="note" style="left:790px;top:256px;font-size:8px">Large: Bank, MICR, Sig</div>
+
+<!-- ════════ CONFIG TABLES ════════ -->
+<div class="ctbl" style="left:18px;top:1000px;width:175px">
+  <div class="ch">Training Config</div>
+  <table>
+    <tr><td>Model</td><td>YOLOv11s</td></tr>
+    <tr><td>Input</td><td>416×416</td></tr>
+    <tr><td>Epochs</td><td>200</td></tr>
+    <tr><td>Batch</td><td>16</td></tr>
+    <tr><td>Optimizer</td><td>Auto (AdamW)</td></tr>
+    <tr><td>LR₀</td><td>0.005</td></tr>
+    <tr><td>Patience</td><td>50</td></tr>
+    <tr><td>AMP</td><td>Enabled</td></tr>
+  </table>
+</div>
+<div class="ctbl" style="left:204px;top:1000px;width:175px">
+  <div class="ch">Augmentation</div>
+  <table>
+    <tr><td>Mosaic</td><td>1.0</td></tr>
+    <tr><td>HSV H/S/V</td><td>.015/.7/.4</td></tr>
+    <tr><td>Translate</td><td>0.1</td></tr>
+    <tr><td>Scale</td><td>0.5</td></tr>
+    <tr><td>FlipLR</td><td>0.5</td></tr>
+    <tr><td>Close Mosaic</td><td>Epoch 190</td></tr>
+  </table>
+</div>
+<div class="ctbl" style="left:390px;top:1000px;width:175px">
+  <div class="ch">Loss Weights</div>
+  <table>
+    <tr><td>Box (CIoU)</td><td>7.5</td></tr>
+    <tr><td>Class (BCE)</td><td>0.5</td></tr>
+    <tr><td>DFL</td><td>1.5</td></tr>
+    <tr><td>Conf Thresh</td><td>0.64</td></tr>
+    <tr><td>IoU (NMS)</td><td>0.7</td></tr>
+  </table>
+</div>
+
+<!-- ════════════════════ SVG ARROWS ════════════════════ -->
+<svg class="arrows" viewBox="0 0 1440 1200" preserveAspectRatio="xMinYMin meet">
+<defs>
+  <!-- arrow heads -->
+  <marker id="ag" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#6b7280"/></marker>
+  <marker id="ao" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#f59e0b"/></marker>
+  <marker id="ai" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#22c55e"/></marker>
+  <marker id="ar" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#ef4444"/></marker>
+</defs>
+
+<!-- ── Input cheque → Input tensor (green) ── -->
+<line x1="147" y1="186" x2="147" y2="236" stroke="#22c55e" stroke-width="2" marker-end="url(#ai)"/>
+
+<!-- ── Backbone vertical chain ── -->
+<line x1="150" y1="280" x2="150" y2="308" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="346" x2="150" y2="368" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="406" x2="150" y2="428" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="466" x2="150" y2="488" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="526" x2="150" y2="548" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="586" x2="150" y2="608" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="646" x2="150" y2="668" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="706" x2="150" y2="728" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="766" x2="150" y2="788" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="826" x2="150" y2="848" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="150" y1="886" x2="150" y2="908" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<!-- ── Backbone C2PSA → Neck Upsample ── -->
+<line x1="248" y1="925" x2="320" y2="925" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<!-- ── Neck FPN vertical (up) ── -->
+<line x1="400" y1="908" x2="400" y2="864" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="830" x2="400" y2="810" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="776" x2="400" y2="752" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="718" x2="400" y2="674" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="640" x2="400" y2="620" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<!-- ── Neck PAN vertical (down) ── -->
+<line x1="400" y1="586" x2="400" y2="552" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="518" x2="400" y2="488" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="454" x2="400" y2="430" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="396" x2="400" y2="372" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="338" x2="400" y2="314" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="400" y1="280" x2="400" y2="274" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<!-- ── Skip connections (orange dashed) ── -->
+<!-- P3 → FPN Concat(P3) -->
+<path d="M248,567 C290,567 290,657 316,657" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#ao)"/>
+<!-- P4 → FPN Concat(P4) -->
+<path d="M248,687 C290,687 290,847 316,847" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#ao)"/>
+<!-- FPN C3K2 (26×26×256) → PAN Concat -->
+<path d="M482,793 C530,793 530,471 484,471" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#ao)"/>
+<!-- C2PSA → PAN Concat(P5) -->
+<path d="M248,940 C560,940 560,297 484,297" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#ao)"/>
+
+<!-- ── Neck → Detect heads ── -->
+<line x1="482" y1="603" x2="604" y2="596" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="482" y1="413" x2="604" y2="414" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="482" y1="257" x2="604" y2="262" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<!-- ── Detect heads → NMS ── -->
+<line x1="694" y1="574" x2="694" y2="524" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="694" y1="436" x2="694" y2="524" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+<line x1="694" y1="284" x2="694" y2="480" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+<!-- ── NMS → Output (red) ── -->
+<line x1="770" y1="494" x2="870" y2="370" stroke="#ef4444" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="770" y1="508" x2="870" y2="570" stroke="#ef4444" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="770" y1="518" x2="870" y2="820" stroke="#ef4444" stroke-width="1.5" marker-end="url(#ar)"/>
+</svg>
+
+</div><!-- /arch -->
+
+<!-- ════════════════════ LEGEND ════════════════════ -->
+<div class="legend">
+  <div class="litem"><span class="swatch" style="background:#ecfdf5;border:1px solid #34d399"></span>Input</div>
+  <div class="litem"><span class="swatch" style="background:#eff6ff;border:1px solid #60a5fa"></span>Conv+BN+SiLU</div>
+  <div class="litem"><span class="swatch" style="background:#f5f3ff;border:1px solid #a78bfa"></span>C3K2 Block</div>
+  <div class="litem"><span class="swatch" style="background:#fffbeb;border:1px solid #fbbf24"></span>SPPF</div>
+  <div class="litem"><span class="swatch" style="background:#fef2f2;border:1px solid #f87171"></span>C2PSA / NMS</div>
+  <div class="litem"><span class="swatch" style="background:#f0fdfa;border:1px solid #2dd4bf"></span>Upsample</div>
+  <div class="litem"><span class="swatch" style="background:#fefce8;border:1px solid #facc15"></span>Concat</div>
+  <div class="litem"><span class="swatch" style="background:#faf5ff;border:1px solid #c084fc"></span>Detect Head</div>
+  <div class="litem"><svg><line x1="0" y1="5" x2="30" y2="5" stroke="#22c55e" stroke-width="2"/></svg>Input</div>
+  <div class="litem"><svg><line x1="0" y1="5" x2="30" y2="5" stroke="#6b7280" stroke-width="1.5"/></svg>Data flow</div>
+  <div class="litem"><svg><line x1="0" y1="5" x2="30" y2="5" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5 3"/></svg>Skip conn</div>
+  <div class="litem"><svg><line x1="0" y1="5" x2="30" y2="5" stroke="#ef4444" stroke-width="2"/></svg>Output</div>
+</div>
+
+<!-- ════════════════════ JAVASCRIPT ════════════════════ -->
+<script>
+/* ── Draw a cheque on a canvas ── */
+function drawCheque(ctx,W,H,boxes){
+  // Background
+  ctx.fillStyle='#faf8f0';ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#d4c9a8';ctx.lineWidth=1.2;ctx.strokeRect(2,2,W-4,H-4);
+
+  // Bank name
+  ctx.fillStyle='#1e3a6e';ctx.font='bold 11px Segoe UI';ctx.fillText('SYNDICATE BANK',12,20);
+  ctx.fillStyle='#78716c';ctx.font='6.5px Segoe UI';ctx.fillText('(A Govt. of India Undertaking)',12,30);
+
+  // Logo
+  ctx.fillStyle='#d4a843';ctx.beginPath();ctx.arc(W-24,20,10,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 7px Segoe UI';ctx.fillText('SB',W-29,23);
+
+  // Date boxes
+  ctx.strokeStyle='#a8a29e';ctx.lineWidth=.5;
+  var dx=W*.6;
+  for(var i=0;i<8;i++) ctx.strokeRect(dx+i*10,8,9,12);
+  ctx.fillStyle='#44403c';ctx.font='8px monospace';ctx.fillText('15032024',dx+1,17);
+
+  // Pay line
+  ctx.fillStyle='#78716c';ctx.font='7px Segoe UI';
+  ctx.fillText('Pay ________________________________',12,46);
+  ctx.fillStyle='#1e3a6e';ctx.font='italic 9px Georgia';ctx.fillText('Mr. Rajesh Kumar',36,44);
+
+  // Rupees
+  ctx.fillStyle='#78716c';ctx.font='7px Segoe UI';
+  ctx.fillText('Rupees _____________________________',12,62);
+  ctx.fillStyle='#1e3a6e';ctx.font='italic 8px Georgia';ctx.fillText('Twenty Five Thousand Only',50,60);
+
+  // Amount box
+  var ax=W*.64;
+  ctx.strokeStyle='#a8a29e';ctx.lineWidth=.8;ctx.strokeRect(ax,68,68,15);
+  ctx.fillStyle='#44403c';ctx.font='bold 9px monospace';ctx.fillText('\u20B9 25,000/-',ax+4,79);
+
+  // Account
+  ctx.fillStyle='#78716c';ctx.font='6.5px Segoe UI';ctx.fillText('A/C No:',12,94);
+  ctx.fillStyle='#44403c';ctx.font='8px monospace';ctx.fillText('0123 4567 8901',44,94);
+
+  // IFSC
+  ctx.fillStyle='#78716c';ctx.font='6.5px Segoe UI';ctx.fillText('IFSC:',W*.46,94);
+  ctx.fillStyle='#44403c';ctx.font='8px monospace';ctx.fillText('SYNB0001234',W*.46+24,94);
+
+  // MICR band
+  ctx.fillStyle='#ece8d8';ctx.fillRect(8,H-26,W-16,18);
+  ctx.fillStyle='#57534e';ctx.font='9px monospace';ctx.fillText('\u2446 560002 \u2446 004 \u2448 01234567 \u2448',18,H-12);
+
+  // Signature
+  ctx.fillStyle='#78716c';ctx.font='6px Segoe UI';ctx.fillText('Authorised Signatory',W*.64,H-30);
+  ctx.strokeStyle='#1e3a6e';ctx.lineWidth=1;ctx.beginPath();
+  ctx.moveTo(W*.66,H-40);ctx.bezierCurveTo(W*.70,H-50,W*.76,H-36,W*.80,H-44);
+  ctx.bezierCurveTo(W*.84,H-52,W*.88,H-38,W*.92,H-44);ctx.stroke();
+
+  if(!boxes) return;
+  var bb=[
+    {x:6,y:4,w:W*.52,h:28,c:'#f97316',l:'Bank_Name 0.97'},
+    {x:dx-3,y:4,w:88,h:18,c:'#d946ef',l:'Date 0.89'},
+    {x:8,y:84,w:110,h:14,c:'#3b82f6',l:'AC/NO 0.94'},
+    {x:W*.45,y:84,w:110,h:14,c:'#eab308',l:'IFSC 0.91'},
+    {x:ax-3,y:64,w:75,h:22,c:'#ef4444',l:'Amount 0.92'},
+    {x:6,y:H-28,w:W-14,h:22,c:'#8b5cf6',l:'MICR 0.95'},
+    {x:W*.62,y:H-54,w:W*.30,h:24,c:'#22c55e',l:'Signature 0.88'}
+  ];
+  bb.forEach(function(b){
+    ctx.strokeStyle=b.c;ctx.lineWidth=1.5;ctx.strokeRect(b.x,b.y,b.w,b.h);
+    ctx.font='6.5px Segoe UI';
+    var tw=ctx.measureText(b.l).width+4;
+    ctx.fillStyle=b.c;ctx.globalAlpha=.85;ctx.fillRect(b.x,b.y-9,tw,9);ctx.globalAlpha=1;
+    ctx.fillStyle='#fff';ctx.fillText(b.l,b.x+2,b.y-2);
+  });
+}
+
+/* Input cheque (no boxes) */
+var ic=document.getElementById('inputCheque');
+if(ic) drawCheque(ic.getContext('2d'),ic.width,ic.height,false);
+
+/* Output cheque (with boxes) */
+var oc=document.getElementById('outputCheque');
+if(oc) drawCheque(oc.getContext('2d'),oc.width,oc.height,true);
+
+/* Feature map heatmaps */
+function drawFM(id,grid,hue,kind){
+  var c=document.getElementById(id);if(!c) return;
+  var ctx=c.getContext('2d'),W=c.width,H=c.height;
+  var cw=Math.max(2,Math.floor(W/grid)),ch=Math.max(2,Math.floor(H/grid));
+  for(var y=0;y<H;y+=ch){
+    for(var x=0;x<W;x+=cw){
+      var cx=x/W,cy=y/H,v=.15+Math.random()*.12;
+      if(kind==='e'){
+        if(cy<.08||cy>.92||cx<.04||cx>.96)v+=.35;
+        if(Math.abs(cy-.44)<.04)v+=.3;
+        if(cy>.82&&cy<.94)v+=.3;
+      }else if(kind==='m'){
+        if(cx<.5&&cy<.25)v+=.45;
+        if(cx>.6&&cy<.2)v+=.4;
+        if(cy>.82)v+=.4;
+      }else{
+        if(cx<.4&&cy<.3)v+=.55;
+        if(cx>.55&&cy>.3&&cy<.65)v+=.5;
+        if(cy>.75)v+=.45;
+      }
+      v=Math.min(1,v);
+      ctx.fillStyle='rgb('+Math.floor(hue[0]*v*255)+','+Math.floor(hue[1]*v*255)+','+Math.floor(hue[2]*v*255)+')';
+      ctx.fillRect(x,y,cw,ch);
+    }
+  }
+}
+drawFM('fm1',8,[.3,.55,1],'e');
+drawFM('fm2',5,[.35,1,.45],'m');
+drawFM('fm3',3,[1,.35,.25],'d');
+</script>
+
+</body>
+</html>

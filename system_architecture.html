@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bank Cheque OCR — System Architecture</title>
+<style>
+  /* ───── Reset & Base ───── */
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #ffffff;
+    color: #1e1e1e;
+    padding: 30px 40px 60px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 36px;
+  }
+
+  /* ───── Phase Sections ───── */
+  .phase {
+    border: 2px dashed #c0c0c0;
+    border-radius: 16px;
+    padding: 28px 32px 32px;
+    margin-bottom: 0;
+    position: relative;
+    background: #fcfcfc;
+  }
+  .phase-label {
+    position: absolute;
+    top: -14px;
+    left: 28px;
+    background: #fff;
+    padding: 2px 14px;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 1px;
+    border-radius: 6px;
+    border: 2px solid #c0c0c0;
+  }
+  .phase-label.train-label { color: #2563eb; border-color: #93bbfd; background: #eef4ff; }
+  .phase-label.infer-label { color: #059669; border-color: #6ee7b7; background: #ecfdf5; }
+
+  /* ───── Flow Row ───── */
+  .flow-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: nowrap;
+  }
+
+  /* ───── Node Boxes ───── */
+  .node {
+    background: #fff;
+    border: 1.8px solid #d1d5db;
+    border-radius: 12px;
+    padding: 14px 18px;
+    min-width: 140px;
+    max-width: 200px;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    flex-shrink: 0;
+  }
+  .node .icon { font-size: 26px; display: block; margin-bottom: 6px; }
+  .node .label { font-weight: 600; font-size: 13px; line-height: 1.3; }
+  .node .detail { font-size: 10.5px; color: #6b7280; margin-top: 4px; line-height: 1.4; }
+
+  /* Color accents */
+  .node.dataset   { border-color: #93bbfd; background: #f0f5ff; }
+  .node.augment   { border-color: #c084fc; background: #faf5ff; }
+  .node.yolo      { border-color: #f97316; background: #fff7ed; }
+  .node.weights   { border-color: #f59e0b; background: #fffbeb; }
+  .node.input     { border-color: #6ee7b7; background: #ecfdf5; }
+  .node.inference { border-color: #38bdf8; background: #f0f9ff; }
+  .node.crop      { border-color: #a78bfa; background: #f5f3ff; }
+  .node.micr      { border-color: #f472b6; background: #fdf2f8; }
+  .node.preproc   { border-color: #67e8f9; background: #ecfeff; }
+  .node.ocr       { border-color: #34d399; background: #ecfdf5; }
+  .node.sig       { border-color: #fbbf24; background: #fffbeb; }
+  .node.clean     { border-color: #a3a3a3; background: #f9fafb; }
+  .node.output    { border-color: #10b981; background: #ecfdf5; }
+  .node.annotate  { border-color: #818cf8; background: #eef2ff; }
+
+  /* ───── Arrows (CSS) ───── */
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 60px;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .arrow .line {
+    width: 48px;
+    height: 2px;
+    background: #9ca3af;
+    position: relative;
+  }
+  .arrow .line::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    top: -5px;
+    border: 6px solid transparent;
+    border-left: 8px solid #9ca3af;
+  }
+  .arrow .arrow-label {
+    font-size: 9.5px;
+    color: #6b7280;
+    white-space: nowrap;
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+
+  /* Vertical arrow */
+  .v-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+  }
+  .v-arrow .v-line {
+    width: 2px;
+    height: 36px;
+    background: #9ca3af;
+    position: relative;
+  }
+  .v-arrow .v-line::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: -5px;
+    border: 6px solid transparent;
+    border-top: 8px solid #9ca3af;
+  }
+  .v-arrow .v-label {
+    font-size: 10px;
+    color: #6b7280;
+    font-weight: 600;
+    margin-top: 2px;
+    white-space: nowrap;
+  }
+
+  /* ───── Branch Section ───── */
+  .branch-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    margin-top: 0;
+    position: relative;
+  }
+
+  .branch-row {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    width: 100%;
+    position: relative;
+  }
+
+  .branch-lane {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    flex: 1;
+    max-width: 260px;
+  }
+
+  .branch-lane .lane-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #9ca3af;
+    margin-bottom: 8px;
+  }
+
+  /* ───── Connector Bridge (SVG) ───── */
+  .svg-connector {
+    width: 100%;
+    overflow: visible;
+  }
+
+  /* ───── Bottom Converge ───── */
+  .converge-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+  }
+
+  .output-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+  }
+
+  /* ───── Field Tag ───── */
+  .field-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    justify-content: center;
+    margin-top: 6px;
+  }
+  .tag {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #f3f4f6;
+    color: #374151;
+    border: 1px solid #e5e7eb;
+    font-weight: 500;
+  }
+
+  /* ───── Spacing helpers ───── */
+  .mt-8 { margin-top: 8px; }
+  .mt-12 { margin-top: 12px; }
+  .mb-8 { margin-bottom: 8px; }
+
+  /* ───── Legend ───── */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-top: 32px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #6b7280;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid;
+  }
+</style>
+</head>
+<body>
+
+<h1>Bank Cheque Layout OCR — System Architecture</h1>
+<p class="subtitle">End-to-end pipeline: YOLOv11s field detection → Field-specific OCR & Template Matching → Structured output</p>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PHASE 1: TRAINING -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div class="phase" style="margin-bottom:0; border-bottom:none; border-radius:16px 16px 0 0;">
+  <span class="phase-label train-label">📘 PHASE 1 — TRAINING</span>
+
+  <div class="flow-row" style="margin-top:10px;">
+    <!-- Dataset -->
+    <div class="node dataset">
+      <span class="icon">🗂️</span>
+      <span class="label">Cheque Dataset</span>
+      <span class="detail">7 classes · YOLO format<br>Train / Valid / Test splits</span>
+      <div class="field-tags mt-8">
+        <span class="tag">Account_Number</span>
+        <span class="tag">Amount</span>
+        <span class="tag">Bank_Name</span>
+        <span class="tag">Date</span>
+        <span class="tag">IFSC</span>
+        <span class="tag">MICR</span>
+        <span class="tag">Signature</span>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow">
+      <span class="arrow-label">data.yaml</span>
+      <div class="line"></div>
+    </div>
+
+    <!-- Augmentation -->
+    <div class="node augment">
+      <span class="icon">🔄</span>
+      <span class="label">Preprocessing &<br>Augmentation</span>
+      <span class="detail">
+        Mosaic (close@190)<br>
+        HSV (H±0.015, S±0.7, V±0.4)<br>
+        FlipLR 50% · Scale ±0.5<br>
+        Resize → 416 × 416
+      </span>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow">
+      <span class="arrow-label">batches</span>
+      <div class="line"></div>
+    </div>
+
+    <!-- YOLOv11s -->
+    <div class="node yolo">
+      <span class="icon">🧠</span>
+      <span class="label">YOLOv11s Model</span>
+      <span class="detail">
+        200 epochs · batch 16<br>
+        AdamW · LR 0.005→0.0001<br>
+        Warmup 3 epochs<br>
+        AMP · Patience 50<br>
+        Pretrained on COCO
+      </span>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow">
+      <span class="arrow-label">best mAP</span>
+      <div class="line"></div>
+    </div>
+
+    <!-- Weights -->
+    <div class="node weights">
+      <span class="icon">💾</span>
+      <span class="label">Trained Weights</span>
+      <span class="detail">
+        best.pt · last.pt<br>
+        7 class detectors<br>
+        Saved to weights/
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Vertical Connector (Training → Inference) ── -->
+<div style="display:flex; justify-content:center;">
+  <div class="v-arrow">
+    <div class="v-line" style="height:28px;"></div>
+    <span class="v-label">best.pt</span>
+    <div class="v-line" style="height:28px;"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PHASE 2: INFERENCE -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div class="phase" style="border-top:none; border-radius:0 0 16px 16px; padding-top: 20px;">
+  <span class="phase-label infer-label">📗 PHASE 2 — INFERENCE</span>
+
+  <!-- Row 1: Input → YOLO → Boxes → Crop -->
+  <div class="flow-row" style="margin-top:8px;">
+
+    <div class="node input">
+      <span class="icon">🏦</span>
+      <span class="label">Cheque Image</span>
+      <span class="detail">Single cheque input<br>via --input_image</span>
+    </div>
+
+    <div class="arrow">
+      <span class="arrow-label">BGR image</span>
+      <div class="line"></div>
+    </div>
+
+    <div class="node inference">
+      <span class="icon">🔍</span>
+      <span class="label">YOLOv11s<br>Inference</span>
+      <span class="detail">
+        conf ≥ 0.64 · IoU 0.7<br>
+        Detect 7 field regions
+      </span>
+    </div>
+
+    <div class="arrow">
+      <span class="arrow-label">bounding boxes</span>
+      <div class="line"></div>
+    </div>
+
+    <div class="node crop">
+      <span class="icon">✂️</span>
+      <span class="label">Region Cropping<br>+ Padding</span>
+      <span class="detail">
+        Default pad: 20 px<br>
+        Date pad: 5 px<br>
+        Save to fields/
+      </span>
+    </div>
+  </div>
+
+  <!-- SVG Branch Connector: Crop → 3 lanes -->
+  <svg id="branchSvg" class="svg-connector" height="60" style="display:block; margin:0 auto; max-width:800px;"></svg>
+
+  <!-- Row 2: 3 Parallel Branches -->
+  <div class="branch-row">
+
+    <!-- ── BRANCH 1: MICR ── -->
+    <div class="branch-lane">
+      <span class="lane-title">🔢 MICR Path</span>
+      <div class="node micr" style="width:100%;">
+        <span class="icon">🔤</span>
+        <span class="label">E-13B Template<br>Matching</span>
+        <span class="detail">
+          Load reference font image<br>
+          14 templates (0–9, T, U, A, D)<br>
+          Resize crop → width 800px<br>
+          Grayscale → Otsu threshold<br>
+          Find contours → Match chars
+        </span>
+      </div>
+      <div class="v-arrow">
+        <div class="v-line" style="height:16px;"></div>
+      </div>
+      <div style="font-size:10px; color:#6b7280; background:#fdf2f8; border:1px solid #f472b6; border-radius:6px; padding:4px 10px; text-align:center;">
+        MICR code string<br><span style="font-size:9px; color:#999;">e.g. ⑆123456⑆ ⑈789012⑈ 34</span>
+      </div>
+    </div>
+
+    <!-- ── BRANCH 2: OCR (Text Fields) ── -->
+    <div class="branch-lane">
+      <span class="lane-title">📝 OCR Path</span>
+      <div class="node preproc" style="width:100%;">
+        <span class="icon">⚙️</span>
+        <span class="label">Field-Specific<br>Preprocessing</span>
+        <span class="detail">
+          <b>Date:</b> CLAHE + Adaptive Thresh<br>+ Vertical line removal<br>
+          <b>Amount:</b> CLAHE + Gaussian Thresh<br>
+          <b>IFSC:</b> Sharpening kernel<br>
+          <b>Bank/AC:</b> Default crop
+        </span>
+      </div>
+      <div class="v-arrow">
+        <div class="v-line" style="height:10px;"></div>
+        <span class="v-label" style="font-size:9px;">processed image</span>
+        <div class="v-line" style="height:10px;"></div>
+      </div>
+      <div class="node ocr" style="width:100%;">
+        <span class="icon">👁️</span>
+        <span class="label">GLM-OCR<br>(Ollama)</span>
+        <span class="detail">
+          Resize if &lt; 384 px<br>
+          CLAHE on L-channel (LAB)<br>
+          Base64 → POST /api/generate<br>
+          Temp 0.3 · System prompt<br>
+          Pure OCR (not VQA)
+        </span>
+      </div>
+      <div class="v-arrow">
+        <div class="v-line" style="height:10px;"></div>
+        <span class="v-label" style="font-size:9px;">raw text</span>
+        <div class="v-line" style="height:10px;"></div>
+      </div>
+      <div class="node clean" style="width:100%;">
+        <span class="icon">🧹</span>
+        <span class="label">Text Cleaning<br>(Regex)</span>
+        <span class="detail">
+          <b>Date:</b> extract DD/MM/YYYY<br>
+          <b>IFSC:</b> pattern [A-Z]{4}0[A-Z0-9]{6}<br>
+          <b>Amount:</b> remove ₹, /, symbols<br>
+          <b>Bank:</b> known-name matching<br>
+          <b>Date retry:</b> adaptive_mean fallback
+        </span>
+      </div>
+      <div class="v-arrow">
+        <div class="v-line" style="height:10px;"></div>
+      </div>
+      <div style="font-size:10px; color:#6b7280; background:#ecfdf5; border:1px solid #34d399; border-radius:6px; padding:4px 10px; text-align:center;">
+        Cleaned text values<br>
+        <span style="font-size:9px; color:#999;">BankName, AC/NO, IFSC, Amount, Date</span>
+      </div>
+    </div>
+
+    <!-- ── BRANCH 3: Signature ── -->
+    <div class="branch-lane">
+      <span class="lane-title">✍️ Signature Path</span>
+      <div class="node sig" style="width:100%;">
+        <span class="icon">🖊️</span>
+        <span class="label">CV Ink Analysis<br>(Primary)</span>
+        <span class="detail">
+          Otsu threshold → Binary<br>
+          Remove H/V lines (morphology)<br>
+          Remove noise (opening)<br>
+          Count ink pixels<br>
+          Ratio &gt; 0.005 → ink found
+        </span>
+      </div>
+      <div class="v-arrow">
+        <div class="v-line" style="height:10px;"></div>
+        <span class="v-label" style="font-size:9px;">has_ink?</span>
+        <div class="v-line" style="height:10px;"></div>
+      </div>
+      <div class="node clean" style="width:100%;">
+        <span class="icon">🔎</span>
+        <span class="label">OCR Label Filter<br>(Secondary)</span>
+        <span class="detail">
+          Read text via GLM-OCR<br>
+          Check printed labels:<br>
+          "Authorised Signatory" etc.<br>
+          If only label → strict CV check<br>
+          (contour analysis + ratio &gt; 0.015)
+        </span>
+      </div>
+      <div class="v-arrow">
+        <div class="v-line" style="height:16px;"></div>
+      </div>
+      <div style="font-size:10px; color:#6b7280; background:#fffbeb; border:1px solid #fbbf24; border-radius:6px; padding:4px 10px; text-align:center;">
+        Signature: True / False
+      </div>
+    </div>
+  </div>
+
+  <!-- SVG Converge Connector: 3 lanes → merge → output -->
+  <svg id="convergeSvg" class="svg-connector" height="50" style="display:block; margin:0 auto; max-width:800px;"></svg>
+
+  <!-- Row 3: Output -->
+  <div class="output-row">
+    <div class="node annotate">
+      <span class="icon">🖼️</span>
+      <span class="label">Annotated Image</span>
+      <span class="detail">
+        Color-coded bounding boxes<br>
+        Labels + confidence scores<br>
+        Saved to predictions/
+      </span>
+    </div>
+
+    <div class="arrow">
+      <span class="arrow-label">save</span>
+      <div class="line"></div>
+    </div>
+
+    <div class="node output" style="min-width:200px;">
+      <span class="icon">📊</span>
+      <span class="label">Cheque_details.xlsx</span>
+      <span class="detail">Excel output via XlsxWriter</span>
+      <div class="field-tags mt-8">
+        <span class="tag">BankName</span>
+        <span class="tag">AC/NO</span>
+        <span class="tag">IFSC</span>
+        <span class="tag">Amount</span>
+        <span class="tag">Cheque MICR Number</span>
+        <span class="tag">Date</span>
+        <span class="tag">Signature</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Legend ── -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#f0f5ff; border-color:#93bbfd;"></div> Data</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#faf5ff; border-color:#c084fc;"></div> Augmentation</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fff7ed; border-color:#f97316;"></div> YOLO Model</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fdf2f8; border-color:#f472b6;"></div> MICR (Template)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ecfeff; border-color:#67e8f9;"></div> Preprocessing</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ecfdf5; border-color:#34d399;"></div> GLM-OCR</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fffbeb; border-color:#fbbf24;"></div> Signature CV</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#eef2ff; border-color:#818cf8;"></div> Output</div>
+</div>
+
+<p style="text-align:center; margin-top:20px; font-size:11px; color:#aaa;">
+  Bank Cheque Layout OCR · YOLOv11s + GLM-OCR + E-13B Template Matching + CV Ink Analysis
+</p>
+
+<script>
+function drawSVG(svgEl, type) {
+  const W = svgEl.clientWidth;
+  const lx = W * 0.165;   // 16.5%
+  const cx = W * 0.5;     // 50%
+  const rx = W * 0.835;   // 83.5%
+  const c = '#9ca3af';
+
+  svgEl.innerHTML = '';
+
+  function line(x1,y1,x2,y2) {
+    const l = document.createElementNS('http://www.w3.org/2000/svg','line');
+    l.setAttribute('x1',x1); l.setAttribute('y1',y1);
+    l.setAttribute('x2',x2); l.setAttribute('y2',y2);
+    l.setAttribute('stroke',c); l.setAttribute('stroke-width','2');
+    svgEl.appendChild(l);
+  }
+  function arrow(x,y) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    p.setAttribute('points', `${x-5},${y-4} ${x+5},${y-4} ${x},${y+5}`);
+    p.setAttribute('fill',c);
+    svgEl.appendChild(p);
+  }
+  function text(x,y,str) {
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x',x); t.setAttribute('y',y);
+    t.setAttribute('text-anchor','middle');
+    t.setAttribute('font-size','9');
+    t.setAttribute('fill','#6b7280');
+    t.setAttribute('font-weight','600');
+    t.textContent = str;
+    svgEl.appendChild(t);
+  }
+
+  if (type === 'branch') {
+    // Trunk down from center
+    line(cx, 0, cx, 20);
+    // Horizontal bar
+    line(lx, 20, rx, 20);
+    // Three branches down
+    line(lx, 20, lx, 54); arrow(lx, 52);
+    line(cx, 20, cx, 54); arrow(cx, 52);
+    line(rx, 20, rx, 54); arrow(rx, 52);
+    // Labels
+    text(lx, 14, 'MICR field');
+    text(cx, 14, 'Text fields');
+    text(rx, 14, 'Signature field');
+  } else {
+    // Three lines up
+    line(lx, 0, lx, 20);
+    line(cx, 0, cx, 20);
+    line(rx, 0, rx, 20);
+    // Horizontal bar
+    line(lx, 20, rx, 20);
+    // Central trunk down
+    line(cx, 20, cx, 46); arrow(cx, 44);
+    // Label
+    text(cx, 14, 'merge all fields');
+  }
+}
+
+function renderConnectors() {
+  const b = document.getElementById('branchSvg');
+  const c = document.getElementById('convergeSvg');
+  if (b) drawSVG(b, 'branch');
+  if (c) drawSVG(c, 'converge');
+}
+
+window.addEventListener('load', renderConnectors);
+window.addEventListener('resize', renderConnectors);
+</script>
+
+</body>
+</html>

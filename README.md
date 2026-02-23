@@ -286,4 +286,7 @@ python main.py --input_image "../cheques/sample_cheque.jpg"
 
 # 6. Check results
 # Output: ../Cheque_details.xlsx
+
+#To See the yolov11 architecture
+python -c "from ultralytics import YOLO; m = YOLO('yolo11s.pt'); print(m.model)"
 ```
